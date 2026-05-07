@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>radio-control helicopter for web AR</title>
+    <meta name="viewport" />
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://unpkg.com/aframe-environment-component@1.0.0/dist/aframe-environment-component.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v6.1.1/dist/aframe-extras.min.js"></script>
+    <script
+      type="module"
+      src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"
+    ></script>
+
+    <style>
+      .v-case {
+        width: 100%;
+        margin: 0 auto;
+        left: 0;
+        right: 0;
+        top: 0;
+        bottom: 0;
+      }
+      .v-cover {
+        width: 100%;
+        height: 100vh;
+        background: url(img/video.jpg) no-repeat center center/cover;
+        position: relative;
+        overflow: hidden;
+      }
+      video {
+        min-width: 100%;
+        min-height: 100vh;
+        position: absolute;
+      }
+      .joystick-frame {
+        width: 350px;
+        height: 350px;
+        position: fixed;
+        background: rgb(204,204,255);
+        border-radius: 50%;
+        top: 75%;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+      }
+      .joystick-ball {
+        width: 200px;
+        height: 200px;
+        position: absolute;
+        background: red;
+        border-radius: 50%;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="v-case">
+      <div class="v-cover">
+        <video id="video" autoplay></video>
+      </div>
+      <div id="joystick-frame" class="joystick-frame">
+        <div id="joystick-ball" class="joystick-ball"></div>
+      </div>
+    </div>
+
+    <script>
+      var video = document.getElementById("video");
+      var media = navigator.mediaDevices.getUserMedia({
+        video: true,
+        video: { facingMode: "environment" }, //背面カメラ
+        audio: false, //音声なし
+      });
+      //リアルタイム再生
+      media.then((stream) => {
+        video.srcObject = stream;
+      });
+    </script>
+
+    <a-scene vr-mode-ui="enabled: false;">
+      <a-asset-item id="heli" src="heli.glb"></a-asset-item>
+      <a-asset-item id="startheli" src="movingheli.glb"></a-asset-item>
+      <a-entity
+        animation-mixer
+        id="moveheli"
+        position="0 -3 -5"
+        rotation="0 90 0"
+        scale="0.5 0.5 0.5"
+        gltf-model="#heli"
+      ></a-entity>
+      <a-camera id="cam" position="0 0 0" rotation="0 0 0">
+        <a-entity cursor="rayOrigin: mouse"> </a-entity>
+      </a-camera>
+    </a-scene>
+
+    <script>
+      var ballCenterX; //ballの中心座標X
+      var ballCenterY; //ballの中心座標Y
+      var ballRad; //ballの中央からの角度
+      var shiftX; //ballが移動した時の中心の補正X
+      var shiftY; //ballが移動した時の中心の補正Y
+      var direction = 90; //ヘリの角度
+      var moving; //ID
+      var down; //ID
+      var up; //ID
+      var cnt = 0; //移動回数
+      const speedMax = 0.3; //移動速度のMax
+      var moveSpeed = 0; //ヘリのスピード
+      var movex = 0; //ballのX->ヘリの移動X方向
+      var movey = 0; //ballのY->ヘリの移動Z方向
+      var heliPos; //ヘリの位置
+      var heliRot; //ヘリの回転
+
+      const ball = document.querySelector("#joystick-ball");
+      const ballRadius = ball.clientWidth / 2;
+      const frame = document.querySelector("#joystick-frame");
+      const frameCenterX =
+        frame.getBoundingClientRect().left + frame.clientWidth / 2;
+      const frameCenterY =
+        frame.getBoundingClientRect().top + frame.clientHeight / 2;
+      const frameRadius = frame.clientWidth / 2;
+      const moveheli = document.querySelector("#moveheli");
+      const cam = document.querySelector("#cam");
+      const flight = new Audio(
+        "flightaudio.mp3"
+      );
+      flight.volume = 0.3;
+      flight.loop = true;
+      const checkLoop = () => {
+        if (flight.currentTime >= flight.duration - 2) {
+          flight.currentTime = 0;
+        }
+      };
+      const cktime = setInterval(checkLoop, 1000); // 1sごとに再生位置をチェック
+      
+      ball.addEventListener("touchstart", touchStart);
+      
+      function touchStart(e) {
+        e.preventDefault();
+        document.addEventListener("touchmove", touchMove);
+        document.addEventListener("touchend", touchEnd);
+
+        if (flight.paused) {
+          flight.play();
+          animChange(1);
+        }
+        clearInterval(down);
+        up = setInterval(heriUp, 50);
+        shiftX = e.touches[0].clientX - frame.clientWidth / 2;
+        shiftY = e.touches[0].clientY - frame.clientHeight / 2;
+        ball.style.background = "yellow";
+      }
+      function touchMove(e) {
+        e.preventDefault();
+        movePosition(e.touches[0].clientX, e.touches[0].clientY);
+        if (cnt == 0) {
+          moving = setInterval(heliMove, 50);
+        }
+        cnt++;
+      }
+      function touchEnd(e) {
+        e.preventDefault();
+        document.removeEventListener("touchmove", touchMove);
+        document.removeEventListener("touchend", touchEnd);
+        ball.style.background = "red";
+        ball.style.left = "50%";
+        ball.style.top = "50%";
+        ball.style.transform = "translate(-50%, -50%)";
+        clearInterval(moving);
+        clearInterval(up);
+        cnt = 0;
+        down = setInterval(heriDown, 50);
+      }
+      function animChange(mode) {
+        moveheli.removeAttribute("gltf-model");
+        if (mode == 0) {  //プロペラ停止:0
+          moveheli.setAttribute("gltf-model", "#heli");
+          moveheli.setAttribute("animation-mixer", "");
+        } else {  //プロペラ稼働中:1
+          moveheli.setAttribute("gltf-model", "#startheli");
+        }
+      }
+      function movePosition(posx, posy) {
+        let moveflag = false;
+        //ballの位置を設定
+        ballCenterX = ball.getBoundingClientRect().left + ballRadius;
+        ballCenterY = ball.getBoundingClientRect().top + ballRadius;
+        let ballDist = Math.sqrt(
+          Math.pow(ballCenterX - frameCenterX, 2) +
+            Math.pow(ballCenterY - frameCenterY, 2)
+        );
+        let mouseDist = Math.sqrt(
+          Math.pow(posx - frameCenterX, 2) + Math.pow(posy - frameCenterY, 2)
+        );
+
+        if (ballDist > 10) {
+          clearInterval(up);
+          ball.style.background = "green";
+          moveflag = true;
+        }
+
+        if (ballDist <= frameRadius && mouseDist < frameRadius) {
+          //ballも指もフレームの中
+          ball.style.left = posx - shiftX + "px";
+          ball.style.top = posy - shiftY + "px";
+        } else {
+          ballRad = Math.atan2(posy - frameCenterY, posx - frameCenterX);
+
+          ball.style.left =
+            frameRadius + frameRadius * Math.cos(ballRad) + "px";
+          ball.style.top = frameRadius + frameRadius * Math.sin(ballRad) + "px";
+        }
+        if (moveflag) {
+          //ヘリ移動中
+          //ヘリのスピードを設定
+          if (ballDist < frameRadius) {
+            moveSpeed = (speedMax * ballDist) / frameRadius;
+          } else {
+            moveSpeed = speedMax;
+          }
+          //ヘリの向きを設定
+          let cameraPos = cam.getAttribute("position");
+          let cameraRot = cam.getAttribute("rotation");
+          ballRad = Math.atan2(
+            ballCenterY - frameCenterY,
+            ballCenterX - frameCenterX
+          );
+          if (ballRad != 0) {
+            direction = cameraRot.y - ((ballRad * 180) / Math.PI + 90);
+            movex = -Math.sin((direction * Math.PI) / 180);
+            movey = -Math.cos((-direction * Math.PI) / 180);
+          } else {
+            movex = 0;
+            movey = 0;
+          }
+        } else {
+          //ヘリ上昇中
+          movex = 0;
+          movey = 0;
+        }
+      }
+      //ヘリの移動
+      var heliMove = function () {
+        heliPos = moveheli.getAttribute("position");
+        heliRot = moveheli.getAttribute("rotation");
+        moveheli.setAttribute("position", {
+          x: heliPos.x + movex * moveSpeed,
+          y: heliPos.y,
+          z: heliPos.z + movey * moveSpeed,
+        });
+        moveheli.setAttribute("rotation", {
+          x: heliRot.x,
+          y: direction,
+          z: heliRot.z,
+        });
+      };
+      //ヘリ降下
+      var heriDown = function () {
+        heliPos = moveheli.getAttribute("position");
+        let downy = heliPos.y - speedMax / 3;
+        if (downy < -10) {
+          if (!flight.paused) {
+            flight.pause();
+            animChange(0);
+          }
+          return;
+        }
+        moveheli.setAttribute("position", {
+          x: heliPos.x,
+          y: downy,
+          z: heliPos.z,
+        });
+      };
+      //ヘリ上昇
+      var heriUp = function () {
+        heliPos = moveheli.getAttribute("position");
+        let upy = heliPos.y + speedMax / 3;
+        if (upy > 20) {
+          return;
+        }
+        moveheli.setAttribute("position", {
+          x: heliPos.x,
+          y: upy,
+          z: heliPos.z,
+        });
+      };
+    </script>
+  </body>
+</html>
